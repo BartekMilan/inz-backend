@@ -44,6 +44,7 @@ jobs:
           script: |
             cd ${{ secrets.PROD_APP_PATH }}
             git pull origin main
+            source ~/.bashrc
             npm install --production
             npm run build
-            # pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'backend' }}
+            pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'backend' }}
