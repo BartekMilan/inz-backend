@@ -48,6 +48,6 @@ jobs:
             [ -s "$HOME/.zshrc" ] && source "$HOME/.zshrc"
             cd ${{ secrets.PROD_APP_PATH }}
             git pull origin main
-            npm install --production
+            npm install
             npm run build
             pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'backend' }}
