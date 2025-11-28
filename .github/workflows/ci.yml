@@ -50,4 +50,4 @@ jobs:
             git pull origin main
             npm install
             npm run build
-            pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'backend' }}
+            pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'api' }}
