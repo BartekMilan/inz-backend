@@ -25,25 +25,25 @@ jobs:
       - name: Build application
         run: npm run build
 
-  # deploy:
-  #   runs-on: ubuntu-latest
-  #   needs: build-and-test
-  #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
       
-  #     - name: Deploy to Production Server
-  #       uses: appleboy/ssh-action@v1.0.0
-  #       with:
-  #         host: ${{ secrets.PROD_HOST }}
-  #         username: ${{ secrets.PROD_USERNAME }}
-  #         key: ${{ secrets.PROD_SSH_KEY }}
-  #         port: ${{ secrets.PROD_PORT || 22 }}
-  #         script: |
-  #           cd ${{ secrets.PROD_APP_PATH }}
-  #           git pull origin main
-  #           npm install --production
-  #           npm run build
-  #           pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'backend' }}
+      - name: Deploy to Production Server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USERNAME }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
+          script: |
+            cd ${{ secrets.PROD_APP_PATH }}
+            git pull origin main
+            npm install --production
+            npm run build
+            # pm2 restart ${{ secrets.PROD_PM2_APP_NAME || 'backend' }}
