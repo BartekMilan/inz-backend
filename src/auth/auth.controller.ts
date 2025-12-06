@@ -26,7 +26,23 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+    console.log('=== AUTH CONTROLLER - LOGIN ENDPOINT CALLED ===');
+    console.log('Request received at:', new Date().toISOString());
+    console.log('LoginDto:', JSON.stringify(loginDto, null, 2));
+    console.log('Email:', loginDto.email);
+    
+    try {
+      const result = await this.authService.login(loginDto);
+      console.log('Login service returned successfully');
+      return result;
+    } catch (error) {
+      console.log('=== EXCEPTION IN AUTH CONTROLLER ===');
+      console.log('Error type:', error?.constructor?.name);
+      console.log('Error message:', error?.message);
+      console.log('Error status:', (error as any)?.status);
+      console.log('Error response:', (error as any)?.response);
+      throw error;
+    }
   }
 
   @Post('logout')

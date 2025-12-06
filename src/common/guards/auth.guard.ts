@@ -3,6 +3,7 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthService } from '../../auth/auth.service';
@@ -25,17 +26,30 @@ export class AuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const path = request.url || request.path;
+    const method = request.method;
+    
+    console.log('=== AUTH GUARD CALLED ===');
+    console.log('Path:', path);
+    console.log('Method:', method);
+    console.log('Timestamp:', new Date().toISOString());
+    
     // Check if route is marked as public
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
 
+    console.log('Is Public:', isPublic);
+
     if (isPublic) {
+      console.log('Route is public - allowing access');
       return true;
     }
+    
+    console.log('Route is protected - checking authentication');
 
-    const request = context.switchToHttp().getRequest();
     const authHeader = request.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -66,7 +80,12 @@ export class AuthGuard implements CanActivate {
       request.user = requestUser;
 
       return true;
-    } catch {
+    } catch (error) {
+      // Propagate ForbiddenException (e.g., account pending approval, no project assigned)
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
+      // For other errors, throw UnauthorizedException
       throw new UnauthorizedException('Nieprawidłowy token');
     }
   }

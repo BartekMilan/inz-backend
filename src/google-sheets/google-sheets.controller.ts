@@ -2,15 +2,21 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Body,
+  Param,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { GoogleSheetsService } from './google-sheets.service';
 import {
   ConnectSheetDto,
   SheetConnectionResponseDto,
   TestConnectionResponseDto,
+  ProjectSheetConfigurationResponseDto,
+  CreateDocumentTemplateDto,
+  DocumentTemplateResponseDto,
 } from './dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -74,7 +80,296 @@ export class GoogleSheetsController {
     };
   }
 
+  // =====================================================
+  // PROJECT-BASED ENDPOINTS
+  // =====================================================
+
   /**
+   * Podłącza arkusz Google Sheets do projektu
+   * Zapisuje konfigurację w bazie danych
+   * Dostępne tylko dla administratorów projektu
+   */
+  @Post('projects/:projectId/connect')
+  @HttpCode(HttpStatus.OK)
+  async connectProjectSheet(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() connectSheetDto: ConnectSheetDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<SheetConnectionResponseDto> {
+    // Najpierw testujemy połączenie
+    const connectionResult = await this.googleSheetsService.testConnection(
+      connectSheetDto.sheetUrl,
+    );
+
+    // Zapisujemy konfigurację dla projektu
+    await this.googleSheetsService.saveProjectSheetConfiguration(
+      projectId,
+      user.id,
+      connectionResult.sheetId,
+      connectionResult.title,
+      connectSheetDto.sheetUrl,
+    );
+
+    return {
+      success: true,
+      message: 'Arkusz został pomyślnie podłączony do projektu',
+      projectId,
+      sheetId: connectionResult.sheetId,
+      sheetTitle: connectionResult.title,
+      sheetsCount: connectionResult.sheetsCount,
+      sheetNames: connectionResult.sheetNames,
+    };
+  }
+
+  /**
+   * Pobiera konfigurację arkusza dla projektu
+   */
+  @Get('projects/:projectId/configuration')
+  async getProjectConfiguration(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<ProjectSheetConfigurationResponseDto> {
+    const config = await this.googleSheetsService.getProjectSheetConfiguration(
+      projectId,
+      user.id,
+    );
+
+    if (!config) {
+      return {
+        configured: false,
+        projectId,
+      };
+    }
+
+    // Testujemy czy połączenie nadal działa
+    try {
+      const connectionTest = await this.googleSheetsService.testConnection(
+        config.sheetUrl,
+      );
+
+      return {
+        configured: true,
+        projectId,
+        config: {
+          sheetId: config.sheetId,
+          sheetTitle: config.sheetTitle,
+          sheetUrl: config.sheetUrl,
+          connected: connectionTest.connected,
+          sheetsCount: connectionTest.sheetsCount,
+          sheetNames: connectionTest.sheetNames,
+        },
+      };
+    } catch {
+      // Połączenie nie działa, ale konfiguracja istnieje
+      return {
+        configured: true,
+        projectId,
+        config: {
+          sheetId: config.sheetId,
+          sheetTitle: config.sheetTitle,
+          sheetUrl: config.sheetUrl,
+          connected: false,
+          error: 'Nie można nawiązać połączenia z arkuszem',
+        },
+      };
+    }
+  }
+
+  /**
+   * Sprawdza status połączenia z arkuszem projektu
+   */
+  @Get('projects/:projectId/status')
+  async getProjectConnectionStatus(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<{ connected: boolean; message: string; projectId: string }> {
+    const config = await this.googleSheetsService.getProjectSheetConfiguration(
+      projectId,
+      user.id,
+    );
+
+    if (!config) {
+      return {
+        connected: false,
+        message: 'Brak skonfigurowanego arkusza dla tego projektu',
+        projectId,
+      };
+    }
+
+    try {
+      await this.googleSheetsService.testConnection(config.sheetUrl);
+      return {
+        connected: true,
+        message: 'Połączenie z arkuszem jest aktywne',
+        projectId,
+      };
+    } catch {
+      return {
+        connected: false,
+        message: 'Nie można nawiązać połączenia z arkuszem',
+        projectId,
+      };
+    }
+  }
+
+  /**
+   * Usuwa konfigurację arkusza dla projektu
+   */
+  @Delete('projects/:projectId/configuration')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteProjectConfiguration(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<void> {
+    await this.googleSheetsService.deleteProjectSheetConfiguration(
+      projectId,
+      user.id,
+    );
+  }
+
+  /**
+   * Pobiera dane z arkusza projektu
+   */
+  @Post('projects/:projectId/data')
+  @HttpCode(HttpStatus.OK)
+  async getProjectSheetData(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() body: { range: string },
+    @CurrentUser() user: RequestUser,
+  ): Promise<{ data: any[][] }> {
+    const data = await this.googleSheetsService.getProjectSheetData(
+      projectId,
+      user.id,
+      body.range,
+    );
+
+    return { data };
+  }
+
+  /**
+   * Aktualizuje dane w arkuszu projektu
+   */
+  @Post('projects/:projectId/data/update')
+  @HttpCode(HttpStatus.OK)
+  async updateProjectSheetData(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() body: { range: string; values: any[][] },
+    @CurrentUser() user: RequestUser,
+  ): Promise<{ success: boolean; message: string }> {
+    await this.googleSheetsService.updateProjectSheetData(
+      projectId,
+      user.id,
+      body.range,
+      body.values,
+    );
+
+    return {
+      success: true,
+      message: 'Dane zostały zaktualizowane',
+    };
+  }
+
+  /**
+   * Dodaje wiersz do arkusza projektu
+   */
+  @Post('projects/:projectId/data/append')
+  @HttpCode(HttpStatus.CREATED)
+  async appendProjectRow(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() body: { sheetName: string; values: any[] },
+    @CurrentUser() user: RequestUser,
+  ): Promise<{ success: boolean; message: string }> {
+    await this.googleSheetsService.appendProjectRow(
+      projectId,
+      user.id,
+      body.sheetName,
+      body.values,
+    );
+
+    return {
+      success: true,
+      message: 'Wiersz został dodany',
+    };
+  }
+
+  // =====================================================
+  // DOCUMENT TEMPLATE ENDPOINTS
+  // =====================================================
+
+  /**
+   * Pobiera wszystkie szablony dokumentów dla projektu
+   */
+  @Get('projects/:projectId/templates')
+  async getProjectTemplates(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<DocumentTemplateResponseDto[]> {
+    const templates = await this.googleSheetsService.getProjectDocumentTemplates(
+      projectId,
+      user.id,
+    );
+
+    return templates.map((template) => ({
+      id: template.id,
+      projectId,
+      name: template.name,
+      docId: template.docId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+
+  /**
+   * Tworzy nowy szablon dokumentu dla projektu
+   */
+  @Post('projects/:projectId/templates')
+  @HttpCode(HttpStatus.CREATED)
+  async createProjectTemplate(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() createTemplateDto: CreateDocumentTemplateDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<DocumentTemplateResponseDto> {
+    const template = await this.googleSheetsService.createDocumentTemplate(
+      projectId,
+      user.id,
+      createTemplateDto.name,
+      createTemplateDto.docId,
+    );
+
+    return {
+      id: template.id,
+      projectId,
+      name: template.name,
+      docId: template.docId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Usuwa szablon dokumentu
+   */
+  @Delete('projects/:projectId/templates/:templateId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteProjectTemplate(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('templateId', ParseUUIDPipe) templateId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<void> {
+    await this.googleSheetsService.deleteDocumentTemplate(
+      projectId,
+      user.id,
+      templateId,
+    );
+  }
+
+  // =====================================================
+  // LEGACY ENDPOINTS (kept for backward compatibility)
+  // Consider deprecating these in future versions
+  // =====================================================
+
+  /**
+   * @deprecated Use POST /projects/:projectId/connect instead
    * Podłącza arkusz Google Sheets do aplikacji
    * Zapisuje konfigurację w bazie danych
    * Dostępne tylko dla administratorów
@@ -91,7 +386,7 @@ export class GoogleSheetsController {
       connectSheetDto.sheetUrl,
     );
 
-    // Zapisujemy konfigurację
+    // Zapisujemy konfigurację (legacy - per user)
     await this.googleSheetsService.saveSheetConfiguration(
       user.id,
       connectionResult.sheetId,
@@ -110,6 +405,7 @@ export class GoogleSheetsController {
   }
 
   /**
+   * @deprecated Use GET /projects/:projectId/configuration instead
    * Pobiera aktualną konfigurację połączonego arkusza
    * Dostępne dla wszystkich zalogowanych użytkowników
    */
@@ -160,6 +456,7 @@ export class GoogleSheetsController {
   }
 
   /**
+   * @deprecated Use GET /projects/:projectId/status instead
    * Sprawdza status połączenia z aktualnie skonfigurowanym arkuszem
    */
   @Get('status')

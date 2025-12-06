@@ -5,26 +5,44 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 @Injectable()
 export class SupabaseService implements OnModuleInit {
   private supabase: SupabaseClient;
+  private supabaseAdmin: SupabaseClient;
 
   constructor(private configService: ConfigService) {}
 
   onModuleInit() {
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
-    const supabaseKey = this.configService.get<string>('SUPABASE_ANON_KEY');
+    const supabaseServiceKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
 
-    if (!supabaseUrl || !supabaseKey) {
-      throw new Error('Supabase URL and Key must be provided');
+    if (!supabaseUrl || !supabaseServiceKey) {
+      throw new Error('Supabase URL and Service Role Key must be provided');
     }
 
-    this.supabase = createClient(supabaseUrl, supabaseKey, {
+    // Use service role key for all operations since RLS is disabled
+    // The backend is responsible for all authorization logic
+    this.supabase = createClient(supabaseUrl, supabaseServiceKey, {
       auth: {
-        autoRefreshToken: true,
+        autoRefreshToken: false,
         persistSession: false,
       },
     });
+
+    // Admin client is now the same as regular client (both use service role key)
+    this.supabaseAdmin = this.supabase;
   }
 
+  /**
+   * Returns Supabase client using service role key.
+   * Since RLS is disabled, all authorization is handled by the backend.
+   */
   getClient(): SupabaseClient {
+    return this.supabase;
+  }
+
+  /**
+   * Returns admin client (same as getClient since RLS is disabled).
+   * Kept for backward compatibility.
+   */
+  getAdminClient(): SupabaseClient {
     return this.supabase;
   }
 

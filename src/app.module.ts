@@ -6,6 +6,8 @@ import { AppService } from './app.service';
 import { SupabaseModule } from './supabase/supabase.module';
 import { AuthModule } from './auth/auth.module';
 import { GoogleSheetsModule } from './google-sheets/google-sheets.module';
+import { ProjectsModule } from './projects/projects.module';
+import { UsersModule } from './users/users.module';
 import { AuthGuard } from './common/guards/auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -18,6 +20,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     SupabaseModule,
     AuthModule,
     GoogleSheetsModule,
+    ProjectsModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [
