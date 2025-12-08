@@ -5,8 +5,11 @@ import {
   ForbiddenException,
   BadRequestException,
   InternalServerErrorException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { SupabaseService } from '../supabase/supabase.service';
+import { GoogleSheetsService } from '../google-sheets/google-sheets.service';
 import { Role } from '../common/enums/role.enum';
 import {
   CreateProjectDto,
@@ -19,13 +22,26 @@ import {
   UpdateFieldDefinitionDto,
   FieldDefinitionResponseDto,
   ProjectMemberRole,
+  ParticipantsResponseDto,
+  ParticipantConfigDto,
+  ParticipantDataDto,
+  ScanHeadersDto,
+  ScanHeadersResponseDto,
+  SheetHeaderDto,
+  UpdateMappingsDto,
+  CreateFieldMappingDto,
+  FieldMappingResponseDto,
 } from './dto';
 
 @Injectable()
 export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
 
-  constructor(private supabaseService: SupabaseService) {}
+  constructor(
+    private supabaseService: SupabaseService,
+    @Inject(forwardRef(() => GoogleSheetsService))
+    private googleSheetsService: GoogleSheetsService,
+  ) {}
 
   // =====================================================
   // PROJECT CRUD OPERATIONS
@@ -845,6 +861,395 @@ export class ProjectsService {
       isVisible: field.is_visible,
       createdAt: field.created_at,
       updatedAt: field.updated_at,
+    };
+  }
+
+  // =====================================================
+  // PARTICIPANTS OPERATIONS
+  // =====================================================
+
+  /**
+   * Converts a column letter (e.g., "A", "B", "AA") to a zero-based index
+   * @param columnLetter - Column letter (e.g., "A", "B", "AA")
+   * @returns Zero-based index (A=0, B=1, AA=26, etc.)
+   */
+  private columnLetterToIndex(columnLetter: string): number {
+    let result = 0;
+    const upperLetter = columnLetter.toUpperCase();
+    
+    for (let i = 0; i < upperLetter.length; i++) {
+      const char = upperLetter.charCodeAt(i) - 64; // A=1, B=2, etc.
+      result = result * 26 + char;
+    }
+    
+    return result - 1; // Convert to zero-based index
+  }
+
+  /**
+   * Gets participants data for a project by fetching from Google Sheets
+   * and mapping columns according to project_field_mappings configuration
+   * @param projectId - ID of the project
+   * @param userId - ID of the user (for authorization)
+   * @returns Mapped participants data with configuration
+   */
+  async getParticipantsForProject(
+    projectId: string,
+    userId: string,
+  ): Promise<ParticipantsResponseDto> {
+    // Check if user has access to project
+    const role = await this.getUserProjectRole(projectId, userId);
+    if (!role) {
+      throw new ForbiddenException('Brak dostępu do tego projektu');
+    }
+
+    const supabase = this.supabaseService.getClient();
+
+    // Step 1: Get field mappings for the project
+    const { data: mappings, error: mappingsError } = await supabase
+      .from('project_field_mappings')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('is_visible', true)
+      .order('sheet_column_letter', { ascending: true });
+
+    if (mappingsError) {
+      this.logger.error('Failed to fetch field mappings:', mappingsError);
+      throw new InternalServerErrorException(
+        'Nie udało się pobrać mapowania pól',
+      );
+    }
+
+    if (!mappings || mappings.length === 0) {
+      // Return empty response if no mappings configured
+      return {
+        config: [],
+        data: [],
+      };
+    }
+
+    // Step 2: Get sheet configuration for the project
+    const sheetConfig = await this.googleSheetsService.getProjectSheetConfiguration(
+      projectId,
+      userId,
+    );
+
+    if (!sheetConfig) {
+      throw new NotFoundException(
+        'Projekt nie ma skonfigurowanego arkusza Google Sheets',
+      );
+    }
+
+    // Step 3: Fetch raw data from Google Sheets (range A:Z)
+    let rawSheetData: any[][];
+    try {
+      rawSheetData = await this.googleSheetsService.getProjectSheetData(
+        projectId,
+        userId,
+        'A:Z',
+      );
+    } catch (error: any) {
+      this.logger.error('Failed to fetch sheet data:', error);
+      throw new InternalServerErrorException(
+        'Nie udało się pobrać danych z arkusza Google Sheets',
+      );
+    }
+
+    if (!rawSheetData || rawSheetData.length === 0) {
+      // Return empty data if sheet is empty
+      const config: ParticipantConfigDto[] = mappings.map((m) => ({
+        key: m.internal_key,
+        label: m.display_name,
+      }));
+
+      return {
+        config,
+        data: [],
+      };
+    }
+
+    // Step 4: Build column index mapping
+    const columnIndexMap = new Map<string, number>();
+    mappings.forEach((mapping) => {
+      const index = this.columnLetterToIndex(mapping.sheet_column_letter);
+      columnIndexMap.set(mapping.internal_key, index);
+    });
+
+    // Step 5: Transform rows from Google Sheets to participant objects
+    const participants: ParticipantDataDto[] = [];
+    
+    // Skip first row if it's a header (optional - you might want to make this configurable)
+    const startRow = 0; // Start from first row (0-indexed)
+    
+    for (let rowIndex = startRow; rowIndex < rawSheetData.length; rowIndex++) {
+      const row = rawSheetData[rowIndex];
+      
+      // Skip empty rows
+      if (!row || row.length === 0 || row.every((cell) => !cell || cell.toString().trim() === '')) {
+        continue;
+      }
+
+      const participant: ParticipantDataDto = {
+        id: rowIndex + 1, // Use row number as ID (1-indexed)
+      };
+
+      // Map each field according to the mapping configuration
+      mappings.forEach((mapping) => {
+        const columnIndex = this.columnLetterToIndex(mapping.sheet_column_letter);
+        const value = row[columnIndex] !== undefined ? row[columnIndex] : null;
+        participant[mapping.internal_key] = value;
+      });
+
+      participants.push(participant);
+    }
+
+    // Step 6: Build configuration array
+    const config: ParticipantConfigDto[] = mappings.map((m) => ({
+      key: m.internal_key,
+      label: m.display_name,
+    }));
+
+    this.logger.log(
+      `Fetched ${participants.length} participants for project ${projectId}`,
+    );
+
+    return {
+      config,
+      data: participants,
+    };
+  }
+
+  // =====================================================
+  // FIELD MAPPING OPERATIONS
+  // =====================================================
+
+  /**
+   * Converts a zero-based index to a column letter (e.g., 0 -> "A", 25 -> "Z", 26 -> "AA")
+   * @param index - Zero-based column index
+   * @returns Column letter
+   */
+  private indexToColumnLetter(index: number): string {
+    let result = '';
+    let num = index + 1; // Convert to 1-based
+    
+    while (num > 0) {
+      const remainder = (num - 1) % 26;
+      result = String.fromCharCode(65 + remainder) + result;
+      num = Math.floor((num - 1) / 26);
+    }
+    
+    return result;
+  }
+
+  /**
+   * Scans headers from a Google Sheet
+   * Fetches the first row (A1:Z1) and returns headers with their column letters
+   * @param projectId - ID of the project
+   * @param userId - ID of the user (for authorization)
+   * @param spreadsheetIdOrUrl - Google Sheets spreadsheet ID or full URL
+   * @returns Array of headers with column letters
+   */
+  async scanSheetHeaders(
+    projectId: string,
+    userId: string,
+    spreadsheetIdOrUrl: string,
+  ): Promise<ScanHeadersResponseDto> {
+    // Check if user has admin access to project
+    const role = await this.getUserProjectRole(projectId, userId);
+    if (!role || !['owner', 'admin'].includes(role)) {
+      throw new ForbiddenException(
+        'Brak uprawnień do skanowania nagłówków dla tego projektu',
+      );
+    }
+
+    // Extract spreadsheet ID if a full URL was provided
+    let spreadsheetId = spreadsheetIdOrUrl.trim();
+    if (spreadsheetId.includes('/')) {
+      try {
+        spreadsheetId = this.googleSheetsService.extractSheetIdFromUrl(spreadsheetId);
+      } catch (error: any) {
+        throw new BadRequestException(
+          'Nieprawidłowy format URL lub ID arkusza. Podaj pełny URL lub ID arkusza.',
+        );
+      }
+    }
+
+    // Fetch headers from Google Sheets (range A1:Z1)
+    let rawHeaders: any[][];
+    try {
+      rawHeaders = await this.googleSheetsService.getSheetData(
+        spreadsheetId,
+        'A1:Z1',
+      );
+    } catch (error: any) {
+      this.logger.error('Failed to fetch sheet headers:', error);
+      throw new InternalServerErrorException(
+        'Nie udało się pobrać nagłówków z arkusza Google Sheets',
+      );
+    }
+
+    // Extract first row (headers)
+    const headerRow = rawHeaders && rawHeaders.length > 0 ? rawHeaders[0] : [];
+
+    // Build response with column letters
+    // Include all columns from the sheet, even if header is empty
+    const headers: SheetHeaderDto[] = [];
+    const maxColumns = Math.min(headerRow.length, 26); // Up to column Z (26 columns)
+    
+    for (let i = 0; i < maxColumns; i++) {
+      const letter = this.indexToColumnLetter(i);
+      const value = headerRow[i] ? String(headerRow[i]).trim() : '';
+      
+      // Include all columns, even if empty (user can still map to empty columns)
+      headers.push({
+        letter,
+        value,
+      });
+    }
+
+    this.logger.log(
+      `Scanned ${headers.length} headers from sheet ${spreadsheetId} for project ${projectId}`,
+    );
+
+    return { headers };
+  }
+
+  /**
+   * Gets all field mappings for a project
+   * @param projectId - ID of the project
+   * @param userId - ID of the user (for authorization)
+   * @returns Array of saved mappings
+   */
+  async getProjectMappings(
+    projectId: string,
+    userId: string,
+  ): Promise<FieldMappingResponseDto[]> {
+    // Check if user has access to project
+    const role = await this.getUserProjectRole(projectId, userId);
+    if (!role) {
+      throw new ForbiddenException('Brak dostępu do tego projektu');
+    }
+
+    const supabase = this.supabaseService.getAdminClient();
+
+    const { data, error } = await supabase
+      .from('project_field_mappings')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      this.logger.error('Failed to fetch field mappings:', error);
+      throw new InternalServerErrorException(
+        'Nie udało się pobrać mapowań pól',
+      );
+    }
+
+    return (data || []).map((m) => this.mapFieldMappingToResponse(m));
+  }
+
+  /**
+   * Updates field mappings for a project
+   * Overwrites all existing mappings with the new ones
+   * @param projectId - ID of the project
+   * @param userId - ID of the user (for authorization)
+   * @param mappings - Array of mappings to save
+   * @returns Array of saved mappings
+   */
+  async updateProjectMappings(
+    projectId: string,
+    userId: string,
+    mappings: CreateFieldMappingDto[],
+  ): Promise<FieldMappingResponseDto[]> {
+    // Check if user has admin access to project
+    const role = await this.getUserProjectRole(projectId, userId);
+    if (!role || !['owner', 'admin'].includes(role)) {
+      throw new ForbiddenException(
+        'Brak uprawnień do aktualizacji mapowań dla tego projektu',
+      );
+    }
+
+    const supabase = this.supabaseService.getAdminClient();
+
+    // Step 1: Delete all existing mappings for this project
+    const { error: deleteError } = await supabase
+      .from('project_field_mappings')
+      .delete()
+      .eq('project_id', projectId);
+
+    if (deleteError) {
+      this.logger.error('Failed to delete existing mappings:', deleteError);
+      throw new InternalServerErrorException(
+        'Nie udało się usunąć istniejących mapowań',
+      );
+    }
+
+    // Step 2: Insert new mappings
+    if (mappings.length === 0) {
+      this.logger.log(`All mappings removed for project ${projectId}`);
+      return [];
+    }
+
+    const insertData = mappings.map((mapping) => ({
+      project_id: projectId,
+      sheet_column_letter: mapping.sheetColumnLetter,
+      internal_key: mapping.internalKey,
+      display_name: mapping.displayName,
+      is_visible: mapping.isVisible ?? true,
+      field_type: mapping.fieldType ?? 'text',
+      is_required: mapping.isRequired ?? false,
+      max_length: mapping.maxLength ?? null,
+      options: mapping.options && mapping.options.length > 0 ? mapping.options : null,
+    }));
+
+    const { data, error: insertError } = await supabase
+      .from('project_field_mappings')
+      .insert(insertData)
+      .select('*');
+
+    if (insertError) {
+      this.logger.error('Failed to insert new mappings:', insertError);
+      throw new InternalServerErrorException(
+        'Nie udało się zapisać nowych mapowań',
+      );
+    }
+
+    this.logger.log(
+      `Updated ${data.length} mappings for project ${projectId}`,
+    );
+
+    return (data || []).map((m) => this.mapFieldMappingToResponse(m));
+  }
+
+  /**
+   * Maps database field mapping to response DTO
+   */
+  private mapFieldMappingToResponse(mapping: any): FieldMappingResponseDto {
+    // Parse options from JSONB if it exists
+    let options: string[] | null = null;
+    if (mapping.options) {
+      try {
+        options = typeof mapping.options === 'string' 
+          ? JSON.parse(mapping.options) 
+          : mapping.options;
+      } catch (error) {
+        this.logger.warn(`Failed to parse options for mapping ${mapping.id}:`, error);
+        options = null;
+      }
+    }
+
+    return {
+      id: mapping.id,
+      projectId: mapping.project_id,
+      sheetColumnLetter: mapping.sheet_column_letter,
+      internalKey: mapping.internal_key,
+      displayName: mapping.display_name,
+      isVisible: mapping.is_visible,
+      fieldType: mapping.field_type ?? 'text',
+      isRequired: mapping.is_required ?? false,
+      maxLength: mapping.max_length ?? null,
+      options: options,
+      createdAt: mapping.created_at,
+      updatedAt: mapping.updated_at,
     };
   }
 }

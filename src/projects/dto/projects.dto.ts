@@ -208,3 +208,165 @@ export class BulkCreateFieldDefinitionsDto {
   @Type(() => CreateFieldDefinitionDto)
   fields: CreateFieldDefinitionDto[];
 }
+
+// =====================================================
+// FIELD MAPPING DTOs
+// =====================================================
+
+export enum FieldMappingType {
+  TEXT = 'text',
+  NUMBER = 'number',
+  DATE = 'date',
+  SELECT = 'select',
+  EMAIL = 'email',
+  CHECKBOX = 'checkbox',
+}
+
+export class CreateFieldMappingDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Litera kolumny jest wymagana' })
+  @MaxLength(10)
+  sheetColumnLetter: string; // e.g., "A", "B", "AA"
+
+  @IsString()
+  @IsNotEmpty({ message: 'Klucz wewnętrzny jest wymagany' })
+  @MaxLength(255)
+  internalKey: string; // e.g., "firstName", "status"
+
+  @IsString()
+  @IsNotEmpty({ message: 'Nazwa wyświetlana jest wymagana' })
+  @MaxLength(255)
+  displayName: string; // e.g., "Imię", "Czy opłacono"
+
+  @IsBoolean()
+  @IsOptional()
+  isVisible?: boolean = true;
+
+  @IsEnum(FieldMappingType, { message: 'Nieprawidłowy typ pola' })
+  @IsOptional()
+  fieldType?: FieldMappingType = FieldMappingType.TEXT;
+
+  @IsBoolean()
+  @IsOptional()
+  isRequired?: boolean = false;
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  maxLength?: number;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  options?: string[]; // For select fields
+}
+
+export class UpdateFieldMappingDto {
+  @IsString()
+  @IsOptional()
+  @MaxLength(10)
+  sheetColumnLetter?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(255)
+  internalKey?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(255)
+  displayName?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  isVisible?: boolean;
+
+  @IsEnum(FieldMappingType, { message: 'Nieprawidłowy typ pola' })
+  @IsOptional()
+  fieldType?: FieldMappingType;
+
+  @IsBoolean()
+  @IsOptional()
+  isRequired?: boolean;
+
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  maxLength?: number;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  options?: string[];
+}
+
+export class FieldMappingResponseDto {
+  id: string;
+  projectId: string;
+  sheetColumnLetter: string;
+  internalKey: string;
+  displayName: string;
+  isVisible: boolean;
+  fieldType: string;
+  isRequired: boolean;
+  maxLength: number | null;
+  options: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export class BulkCreateFieldMappingsDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateFieldMappingDto)
+  mappings: CreateFieldMappingDto[];
+}
+
+// =====================================================
+// PARTICIPANTS DTOs
+// =====================================================
+
+export class ParticipantConfigDto {
+  key: string;
+  label: string;
+}
+
+export class ParticipantDataDto {
+  id: number;
+  [key: string]: any; // Dynamic fields based on mappings
+}
+
+export class ParticipantsResponseDto {
+  config: ParticipantConfigDto[];
+  data: ParticipantDataDto[];
+}
+
+// =====================================================
+// SCAN HEADERS DTOs
+// =====================================================
+
+export class ScanHeadersDto {
+  @IsString()
+  @IsNotEmpty({ message: 'ID arkusza jest wymagane' })
+  spreadsheetId: string;
+}
+
+export class SheetHeaderDto {
+  letter: string; // e.g., "A", "B", "AA"
+  value: string; // Header value from the sheet
+}
+
+export class ScanHeadersResponseDto {
+  headers: SheetHeaderDto[];
+}
+
+// =====================================================
+// UPDATE MAPPINGS DTOs
+// =====================================================
+
+export class UpdateMappingsDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateFieldMappingDto)
+  mappings: CreateFieldMappingDto[];
+}

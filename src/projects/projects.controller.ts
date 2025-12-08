@@ -23,6 +23,11 @@ import {
   UpdateFieldDefinitionDto,
   FieldDefinitionResponseDto,
   BulkCreateFieldDefinitionsDto,
+  ParticipantsResponseDto,
+  ScanHeadersDto,
+  ScanHeadersResponseDto,
+  UpdateMappingsDto,
+  FieldMappingResponseDto,
 } from './dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { RequestUser } from '../common/guards/auth.guard';
@@ -263,6 +268,71 @@ export class ProjectsController {
       projectId,
       fieldId,
       user.id,
+    );
+  }
+
+  // =====================================================
+  // PARTICIPANTS ENDPOINTS
+  // =====================================================
+
+  /**
+   * Get participants data for a project
+   * Fetches data from Google Sheets and maps columns according to project_field_mappings
+   */
+  @Get(':projectId/participants')
+  async getParticipants(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<ParticipantsResponseDto> {
+    return this.projectsService.getParticipantsForProject(projectId, user.id);
+  }
+
+  // =====================================================
+  // FIELD MAPPING ENDPOINTS
+  // =====================================================
+
+  /**
+   * Get all field mappings for a project
+   */
+  @Get(':projectId/mappings')
+  async getMappings(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<FieldMappingResponseDto[]> {
+    return this.projectsService.getProjectMappings(projectId, user.id);
+  }
+
+  /**
+   * Scan headers from a Google Sheet
+   * Fetches the first row (A1:Z1) and returns headers with column letters
+   */
+  @Post(':projectId/scan-headers')
+  async scanHeaders(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() scanHeadersDto: ScanHeadersDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<ScanHeadersResponseDto> {
+    return this.projectsService.scanSheetHeaders(
+      projectId,
+      user.id,
+      scanHeadersDto.spreadsheetId,
+    );
+  }
+
+  /**
+   * Update field mappings for a project
+   * Overwrites all existing mappings with the new ones
+   */
+  @Put(':projectId/mappings')
+  async updateMappings(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() updateMappingsDto: UpdateMappingsDto,
+    @CurrentUser() user: RequestUser,
+  ): Promise<FieldMappingResponseDto[]> {
+    return this.projectsService.updateProjectMappings(
+      projectId,
+      user.id,
+      updateMappingsDto.mappings,
     );
   }
 }
