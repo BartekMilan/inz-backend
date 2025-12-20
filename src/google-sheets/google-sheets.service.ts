@@ -41,48 +41,46 @@ export class GoogleSheetsService implements OnModuleInit {
 
   /**
    * Inicjalizacja klienta Google Sheets API
-   * Używamy Service Account z JWT do autoryzacji
+   * Używamy OAuth2 (User Credentials) do autoryzacji
    */
   private async initializeGoogleSheets(): Promise<void> {
-    // Pobierz wymagane zmienne środowiskowe
-    const clientEmail = this.configService.get<string>('GOOGLE_CLIENT_EMAIL');
-    const rawPrivateKey = this.configService.get<string>('GOOGLE_PRIVATE_KEY');
+    // Pobierz wymagane zmienne środowiskowe OAuth2
+    const clientId = this.configService.get<string>('GOOGLE_AUTH_CLIENT_ID');
+    const clientSecret = this.configService.get<string>('GOOGLE_AUTH_CLIENT_SECRET');
+    const refreshToken = this.configService.get<string>('GOOGLE_AUTH_REFRESH_TOKEN');
 
     // Sprawdź minimalne wymagane zmienne
-    if (!clientEmail || !rawPrivateKey) {
+    if (!clientId || !clientSecret || !refreshToken) {
       const missingVars: string[] = [];
-      if (!clientEmail) missingVars.push('GOOGLE_CLIENT_EMAIL');
-      if (!rawPrivateKey) missingVars.push('GOOGLE_PRIVATE_KEY');
+      if (!clientId) missingVars.push('GOOGLE_AUTH_CLIENT_ID');
+      if (!clientSecret) missingVars.push('GOOGLE_AUTH_CLIENT_SECRET');
+      if (!refreshToken) missingVars.push('GOOGLE_AUTH_REFRESH_TOKEN');
       
       this.initializationError = `Brakujące zmienne środowiskowe: ${missingVars.join(', ')}`;
       this.logger.error(`Google Sheets API initialization failed: ${this.initializationError}`);
-      this.logger.warn('Google Sheets integration is disabled. Set the required environment variables to enable it.');
+      this.logger.warn('Google Sheets integration is disabled. Set the required OAuth2 environment variables to enable it.');
       return;
     }
 
     try {
-      // Krytyczna poprawka: zamień \\n na rzeczywiste znaki nowej linii
-      // Zmienne z .env często mają błędnie interpretowane znaki nowej linii
-      const privateKey = (this.configService.get('GOOGLE_PRIVATE_KEY') || '').replace(/\\n/g, '\n');
+      // Utwórz klienta OAuth2 z credentials
+      const oauth2Client = new google.auth.OAuth2(
+        clientId,
+        clientSecret,
+        'http://localhost', // Redirect URI dla Desktop App
+      );
 
-      // Utwórz klienta GoogleAuth z credentials
-      const auth = new google.auth.GoogleAuth({
-        credentials: {
-          client_email: clientEmail,
-          private_key: privateKey,
-        },
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      // Ustaw refresh token (używany do automatycznego odświeżania access token)
+      oauth2Client.setCredentials({
+        refresh_token: refreshToken,
       });
 
-      // Pobierz klienta autoryzacji
-      await auth.getClient();
-
-      this.sheets = google.sheets({ version: 'v4', auth });
+      this.sheets = google.sheets({ version: 'v4', auth: oauth2Client });
       this.isInitialized = true;
       this.initializationError = null;
       
-      this.logger.log('Google Sheets API client initialized successfully');
-      this.logger.log(`Service Account Email: ${clientEmail}`);
+      this.logger.log('Google Sheets API client initialized successfully with OAuth2');
+      this.logger.log(`OAuth2 Client ID: ${clientId.substring(0, 20)}...`);
     } catch (error: any) {
       this.initializationError = error.message || 'Unknown initialization error';
       this.logger.error('Failed to initialize Google Sheets API client:', error.message);
@@ -105,10 +103,13 @@ export class GoogleSheetsService implements OnModuleInit {
   }
 
   /**
-   * Zwraca adres email Service Account (do wyświetlenia użytkownikowi)
+   * Zwraca informację o konfiguracji OAuth2 (do wyświetlenia użytkownikowi)
+   * @deprecated Metoda zachowana dla kompatybilności wstecznej
    */
   getServiceAccountEmail(): string | null {
-    return this.configService.get<string>('GOOGLE_CLIENT_EMAIL') || null;
+    // Dla OAuth2 nie mamy bezpośredniego dostępu do emaila użytkownika
+    // Można by pobrać z Google API, ale to wymaga dodatkowego wywołania
+    return null;
   }
 
   /**
@@ -182,7 +183,7 @@ export class GoogleSheetsService implements OnModuleInit {
 
       // Obsługa specyficznych błędów
       if (error.code === 403 || error.message?.includes('permission')) {
-        const errorMsg = `Brak dostępu do arkusza. Arkusz musi być udostępniony (z uprawnieniami "Edytor") dla adresu: ${serviceAccountEmail}`;
+        const errorMsg = `Brak dostępu do arkusza. Arkusz musi być udostępniony (z uprawnieniami "Edytor") dla konta Google używanego do autoryzacji OAuth2.`;
         this.logger.error(errorMsg);
         throw new BadRequestException(errorMsg);
       }
@@ -194,16 +195,9 @@ export class GoogleSheetsService implements OnModuleInit {
       }
 
       if (error.code === 401 || error.message?.includes('unauthorized') || error.message?.includes('invalid_grant')) {
-        this.logger.error('Authentication error - check Service Account credentials');
+        this.logger.error('Authentication error - check OAuth2 credentials');
         throw new InternalServerErrorException(
-          'Błąd autoryzacji z Google API. Sprawdź konfigurację Service Account.',
-        );
-      }
-
-      if (error.message?.includes('invalid_key') || error.message?.includes('private key')) {
-        this.logger.error('Invalid private key format');
-        throw new InternalServerErrorException(
-          'Nieprawidłowy format klucza prywatnego. Sprawdź zmienną GOOGLE_PRIVATE_KEY.',
+          'Błąd autoryzacji z Google API. Sprawdź konfigurację OAuth2 (GOOGLE_AUTH_CLIENT_ID, GOOGLE_AUTH_CLIENT_SECRET, GOOGLE_AUTH_REFRESH_TOKEN).',
         );
       }
 
@@ -655,11 +649,9 @@ export class GoogleSheetsService implements OnModuleInit {
    * Wspólna obsługa błędów Google Sheets API
    */
   private handleSheetError(error: any, action: string): never {
-    const serviceAccountEmail = this.getServiceAccountEmail();
-    
     if (error.code === 403) {
       throw new BadRequestException(
-        `Brak uprawnień do ${action}. Upewnij się, że arkusz jest udostępniony dla: ${serviceAccountEmail}`,
+        `Brak uprawnień do ${action}. Upewnij się, że arkusz jest udostępniony dla konta Google używanego do autoryzacji OAuth2.`,
       );
     }
 

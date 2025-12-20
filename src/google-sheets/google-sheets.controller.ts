@@ -28,7 +28,7 @@ export class GoogleSheetsController {
   constructor(private readonly googleSheetsService: GoogleSheetsService) {}
 
   /**
-   * Pobiera informacje o Service Account (do wyświetlenia użytkownikowi)
+   * Pobiera informacje o konfiguracji OAuth2 (do wyświetlenia użytkownikowi)
    * Dostępne tylko dla administratorów
    */
   @Get('service-account')
@@ -38,20 +38,22 @@ export class GoogleSheetsController {
     email: string | null;
     message: string;
   } {
-    const email = this.googleSheetsService.getServiceAccountEmail();
+    // Dla OAuth2 nie mamy bezpośredniego dostępu do emaila użytkownika
+    // Sprawdzamy czy serwis jest zainicjalizowany (czy są ustawione zmienne OAuth2)
+    const isConfigured = this.googleSheetsService['isInitialized'] || false;
     
-    if (!email) {
+    if (!isConfigured) {
       return {
         configured: false,
         email: null,
-        message: 'Google Sheets API nie jest skonfigurowane. Ustaw zmienne GOOGLE_CLIENT_EMAIL i GOOGLE_PRIVATE_KEY w pliku .env',
+        message: 'Google Sheets API nie jest skonfigurowane. Ustaw zmienne GOOGLE_AUTH_CLIENT_ID, GOOGLE_AUTH_CLIENT_SECRET i GOOGLE_AUTH_REFRESH_TOKEN w pliku .env',
       };
     }
 
     return {
       configured: true,
-      email,
-      message: `Udostępnij arkusz dla adresu: ${email}`,
+      email: null, // Dla OAuth2 email nie jest dostępny bez dodatkowego wywołania API
+      message: 'Google Sheets API jest skonfigurowane z OAuth2. Udostępnij arkusz dla konta Google używanego do autoryzacji.',
     };
   }
 
