@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Readable } from 'stream';
 import { google, drive_v3, docs_v1 } from 'googleapis';
 
 @Injectable()
@@ -417,11 +418,14 @@ export class GoogleDocsService implements OnModuleInit {
         requestBody.parents = [folderId];
       }
 
+      // Konwertuj Buffer na Readable stream (wymagane przez googleapis)
+      const pdfStream = Readable.from(pdfBuffer);
+
       const response = await this.drive!.files.create({
         requestBody,
         media: {
           mimeType: 'application/pdf',
-          body: pdfBuffer,
+          body: pdfStream,
         },
       });
 
