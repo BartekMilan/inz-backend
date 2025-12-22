@@ -227,11 +227,8 @@ export class GoogleSheetsService implements OnModuleInit {
     sheetTitle: string,
     sheetUrl: string,
   ): Promise<void> {
-    // Verify user has admin access to project
-    const hasAccess = await this.projectsService.userHasAdminAccess(projectId, userId);
-    if (!hasAccess) {
-      throw new ForbiddenException('Brak uprawnień do konfiguracji tego projektu');
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.projectsService.validateProjectRole(projectId, userId, 'owner');
 
     // Use admin client to bypass RLS
     const supabase = this.supabaseService.getAdminClient();
@@ -357,11 +354,8 @@ export class GoogleSheetsService implements OnModuleInit {
     projectId: string,
     userId: string,
   ): Promise<void> {
-    // Verify user has admin access to project
-    const hasAccess = await this.projectsService.userHasAdminAccess(projectId, userId);
-    if (!hasAccess) {
-      throw new ForbiddenException('Brak uprawnień do konfiguracji tego projektu');
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.projectsService.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getClient();
 
@@ -422,11 +416,8 @@ export class GoogleSheetsService implements OnModuleInit {
     range: string,
     values: any[][],
   ): Promise<void> {
-    // Verify user has access to project (at least member level for writing)
-    const hasAccess = await this.projectsService.userHasProjectAccess(projectId, userId);
-    if (!hasAccess) {
-      throw new ForbiddenException('Brak dostępu do tego projektu');
-    }
+    // Wymagana rola: editor (syncData)
+    await this.projectsService.validateProjectRole(projectId, userId, 'editor');
 
     const config = await this.getProjectSheetConfigInternal(projectId);
     if (!config) {
@@ -449,11 +440,8 @@ export class GoogleSheetsService implements OnModuleInit {
     sheetName: string,
     values: any[],
   ): Promise<void> {
-    // Verify user has access to project
-    const hasAccess = await this.projectsService.userHasProjectAccess(projectId, userId);
-    if (!hasAccess) {
-      throw new ForbiddenException('Brak dostępu do tego projektu');
-    }
+    // Wymagana rola: editor (syncData)
+    await this.projectsService.validateProjectRole(projectId, userId, 'editor');
 
     const config = await this.getProjectSheetConfigInternal(projectId);
     if (!config) {
@@ -719,11 +707,8 @@ export class GoogleSheetsService implements OnModuleInit {
     name: string,
     docId: string,
   ): Promise<{ id: string; name: string; docId: string }> {
-    // Verify user has admin access to project
-    const hasAccess = await this.projectsService.userHasAdminAccess(projectId, userId);
-    if (!hasAccess) {
-      throw new ForbiddenException('Brak uprawnień do konfiguracji tego projektu');
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.projectsService.validateProjectRole(projectId, userId, 'owner');
 
     // Use admin client to bypass RLS
     const supabase = this.supabaseService.getAdminClient();
@@ -767,11 +752,8 @@ export class GoogleSheetsService implements OnModuleInit {
     userId: string,
     templateId: string,
   ): Promise<void> {
-    // Verify user has admin access to project
-    const hasAccess = await this.projectsService.userHasAdminAccess(projectId, userId);
-    if (!hasAccess) {
-      throw new ForbiddenException('Brak uprawnień do konfiguracji tego projektu');
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.projectsService.validateProjectRole(projectId, userId, 'owner');
 
     // Use admin client to bypass RLS
     const supabase = this.supabaseService.getAdminClient();

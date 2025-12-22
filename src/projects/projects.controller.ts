@@ -17,6 +17,7 @@ import {
   ProjectResponseDto,
   ProjectListResponseDto,
   AddProjectMemberDto,
+  AddProjectMemberByEmailDto,
   UpdateProjectMemberDto,
   ProjectMemberResponseDto,
   CreateFieldDefinitionDto,
@@ -136,16 +137,16 @@ export class ProjectsController {
   }
 
   /**
-   * Add a member to a project
+   * Add a member to a project by email
    */
   @Post(':projectId/members')
   @HttpCode(HttpStatus.CREATED)
   async addProjectMember(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Body() addMemberDto: AddProjectMemberDto,
+    @Body() addMemberDto: AddProjectMemberByEmailDto,
     @CurrentUser() user: RequestUser,
   ): Promise<ProjectMemberResponseDto> {
-    return this.projectsService.addProjectMember(
+    return this.projectsService.addProjectMemberByEmail(
       projectId,
       user.id,
       addMemberDto,
@@ -171,18 +172,18 @@ export class ProjectsController {
   }
 
   /**
-   * Remove a member from a project
+   * Remove a member from a project by userId
    */
-  @Delete(':projectId/members/:memberId')
+  @Delete(':projectId/members/:userId')
   @HttpCode(HttpStatus.NO_CONTENT)
   async removeProjectMember(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Param('memberId', ParseUUIDPipe) memberId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
     @CurrentUser() user: RequestUser,
   ): Promise<void> {
-    return this.projectsService.removeProjectMember(
+    return this.projectsService.removeProjectMemberByUserId(
       projectId,
-      memberId,
+      userId,
       user.id,
     );
   }
@@ -334,5 +335,25 @@ export class ProjectsController {
       user.id,
       updateMappingsDto.mappings,
     );
+  }
+
+  // =====================================================
+  // PROJECT STATS ENDPOINT
+  // =====================================================
+
+  /**
+   * Get project statistics
+   */
+  @Get(':projectId/stats')
+  async getProjectStats(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: RequestUser,
+  ): Promise<{
+    participantCount: number;
+    documentCount: number;
+    lastTaskErrorCount: number;
+    progressPercentage: number | null;
+  }> {
+    return this.projectsService.getProjectStats(projectId, user.id);
   }
 }

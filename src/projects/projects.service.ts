@@ -16,6 +16,7 @@ import {
   UpdateProjectDto,
   ProjectResponseDto,
   AddProjectMemberDto,
+  AddProjectMemberByEmailDto,
   UpdateProjectMemberDto,
   ProjectMemberResponseDto,
   CreateFieldDefinitionDto,
@@ -238,13 +239,9 @@ export class ProjectsService {
     userId: string,
     updateProjectDto: UpdateProjectDto,
   ): Promise<ProjectResponseDto> {
-    // Check if user has admin access
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
     const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do edycji tego projektu',
-      );
-    }
 
     const supabase = this.supabaseService.getClient();
 
@@ -282,9 +279,12 @@ export class ProjectsService {
    * Deletes a project (only owner can delete)
    */
   async deleteProject(projectId: string, userId: string): Promise<void> {
+    // Wymagana rola: owner (deleteProject)
+    await this.validateProjectRole(projectId, userId, 'owner');
+
     const supabase = this.supabaseService.getClient();
 
-    // Check if user is owner
+    // Sprawdź czy projekt istnieje
     const { data: project } = await supabase
       .from('projects')
       .select('owner_id')
@@ -293,12 +293,6 @@ export class ProjectsService {
 
     if (!project) {
       throw new NotFoundException('Projekt nie został znaleziony');
-    }
-
-    if (project.owner_id !== userId) {
-      throw new ForbiddenException(
-        'Tylko właściciel może usunąć projekt',
-      );
     }
 
     const { error } = await supabase
@@ -326,13 +320,8 @@ export class ProjectsService {
     userId: string,
     addMemberDto: AddProjectMemberDto,
   ): Promise<ProjectMemberResponseDto> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do dodawania członków',
-      );
-    }
+    // Wymagana rola: owner (manageMembers)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     // Cannot add someone as owner through this method
     if (addMemberDto.role === ProjectMemberRole.OWNER) {
@@ -362,7 +351,7 @@ export class ProjectsService {
       .insert({
         project_id: projectId,
         user_id: addMemberDto.userId,
-        role: addMemberDto.role || ProjectMemberRole.MEMBER,
+        role: addMemberDto.role || ProjectMemberRole.VIEWER,
       })
       .select('*')
       .single();
@@ -388,13 +377,10 @@ export class ProjectsService {
     projectId: string,
     userId: string,
   ): Promise<ProjectMemberResponseDto[]> {
-    // Check if user has access to project
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role) {
-      throw new ForbiddenException('Brak dostępu do tego projektu');
-    }
+    // Wymagana rola: viewer (dostęp do odczytu)
+    await this.validateProjectRole(projectId, userId, 'viewer');
 
-    const supabase = this.supabaseService.getClient();
+    const supabase = this.supabaseService.getAdminClient();
 
     const { data, error } = await supabase
       .from('project_members')
@@ -409,7 +395,20 @@ export class ProjectsService {
       );
     }
 
-    return (data || []).map((m) => this.mapMemberToResponse(m));
+    // Pobierz emaile użytkowników
+    const { data: authUsers } = await supabase.auth.admin.listUsers();
+    const userMap = new Map(
+      (authUsers?.users || []).map((u) => [u.id, u.email]),
+    );
+
+    return (data || []).map((m) => {
+      const response = this.mapMemberToResponse(m);
+      const email = userMap.get(m.user_id);
+      if (email) {
+        response.user = { email };
+      }
+      return response;
+    });
   }
 
   /**
@@ -421,13 +420,8 @@ export class ProjectsService {
     userId: string,
     updateMemberDto: UpdateProjectMemberDto,
   ): Promise<ProjectMemberResponseDto> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do edycji członków',
-      );
-    }
+    // Wymagana rola: owner (manageMembers)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     // Cannot change to owner role
     if (updateMemberDto.role === ProjectMemberRole.OWNER) {
@@ -483,13 +477,8 @@ export class ProjectsService {
     memberId: string,
     userId: string,
   ): Promise<void> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do usuwania członków',
-      );
-    }
+    // Wymagana rola: owner (manageMembers)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getClient();
 
@@ -527,6 +516,225 @@ export class ProjectsService {
     this.logger.log(`Member ${memberId} removed from project ${projectId}`);
   }
 
+  /**
+   * Adds a member to a project by email
+   */
+  async addProjectMemberByEmail(
+    projectId: string,
+    userId: string,
+    addMemberDto: AddProjectMemberByEmailDto,
+  ): Promise<ProjectMemberResponseDto> {
+    // Wymagana rola: owner (manageMembers)
+    await this.validateProjectRole(projectId, userId, 'owner');
+
+    // Cannot add someone as owner through this method
+    if (addMemberDto.role === ProjectMemberRole.OWNER) {
+      throw new BadRequestException(
+        'Nie można dodać użytkownika jako właściciela',
+      );
+    }
+
+    const supabase = this.supabaseService.getAdminClient();
+
+    // Find user by email
+    const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+    if (authError) {
+      this.logger.error('Failed to list users:', authError);
+      throw new InternalServerErrorException('Nie udało się znaleźć użytkownika');
+    }
+
+    const targetUser = authUsers.users.find(
+      (u) => u.email?.toLowerCase() === addMemberDto.email.toLowerCase(),
+    );
+
+    if (!targetUser) {
+      throw new NotFoundException(
+        `Użytkownik o emailu ${addMemberDto.email} nie został znaleziony`,
+      );
+    }
+
+    // Check if user is already a member
+    const { data: existing } = await supabase
+      .from('project_members')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('user_id', targetUser.id)
+      .single();
+
+    if (existing) {
+      throw new BadRequestException(
+        'Użytkownik jest już członkiem tego projektu',
+      );
+    }
+
+    const { data, error } = await supabase
+      .from('project_members')
+      .insert({
+        project_id: projectId,
+        user_id: targetUser.id,
+        role: addMemberDto.role || ProjectMemberRole.VIEWER,
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      this.logger.error('Failed to add project member:', error);
+      throw new InternalServerErrorException(
+        'Nie udało się dodać członka do projektu',
+      );
+    }
+
+    this.logger.log(
+      `Member ${targetUser.id} (${addMemberDto.email}) added to project ${projectId}`,
+    );
+
+    return this.mapMemberToResponse(data);
+  }
+
+  /**
+   * Removes a member from a project by userId
+   */
+  async removeProjectMemberByUserId(
+    projectId: string,
+    targetUserId: string,
+    userId: string,
+  ): Promise<void> {
+    // Wymagana rola: owner (manageMembers)
+    await this.validateProjectRole(projectId, userId, 'owner');
+
+    const supabase = this.supabaseService.getClient();
+
+    // Get member to check if it's the owner
+    const { data: member } = await supabase
+      .from('project_members')
+      .select('role, user_id')
+      .eq('project_id', projectId)
+      .eq('user_id', targetUserId)
+      .single();
+
+    if (!member) {
+      throw new NotFoundException('Członek nie został znaleziony');
+    }
+
+    if (member.role === ProjectMemberRole.OWNER) {
+      throw new BadRequestException(
+        'Nie można usunąć właściciela projektu',
+      );
+    }
+
+    const { error } = await supabase
+      .from('project_members')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('user_id', targetUserId);
+
+    if (error) {
+      this.logger.error('Failed to remove project member:', error);
+      throw new InternalServerErrorException(
+        'Nie udało się usunąć członka z projektu',
+      );
+    }
+
+    this.logger.log(`Member ${targetUserId} removed from project ${projectId}`);
+  }
+
+  /**
+   * Gets project statistics
+   */
+  async getProjectStats(
+    projectId: string,
+    userId: string,
+  ): Promise<{
+    participantCount: number;
+    documentCount: number;
+    lastTaskErrorCount: number;
+    progressPercentage: number | null;
+  }> {
+    // Wymagana rola: viewer (dostęp do odczytu)
+    await this.validateProjectRole(projectId, userId, 'viewer');
+
+    const supabase = this.supabaseService.getAdminClient();
+
+    // 1. Liczba uczestników - pobierz z Google Sheets (używamy getParticipantsForProject)
+    let participantCount = 0;
+    try {
+      const participantsResponse = await this.getParticipantsForProject(
+        projectId,
+        userId,
+      );
+      participantCount = participantsResponse.data.length;
+    } catch (error: any) {
+      this.logger.warn(
+        `Failed to get participant count for project ${projectId}:`,
+        error.message,
+      );
+      // Nie rzucamy błędu, po prostu zwracamy 0
+    }
+
+    // 2. Liczba wygenerowanych dokumentów - zlicz z tasków
+    const { data: tasks, error: tasksError } = await supabase
+      .from('document_generation_tasks')
+      .select('output_files, status')
+      .eq('project_id', projectId)
+      .in('status', ['done', 'failed']);
+
+    let documentCount = 0;
+    if (!tasksError && tasks) {
+      tasks.forEach((task) => {
+        if (task.output_files && Array.isArray(task.output_files)) {
+          // Zlicz tylko udane dokumenty (te z pdfFileId)
+          const successfulDocs = task.output_files.filter(
+            (file: any) => file.pdfFileId && !file.error,
+          );
+          documentCount += successfulDocs.length;
+        }
+      });
+    }
+
+    // 3. Liczba błędów w ostatnim tasku
+    let lastTaskErrorCount = 0;
+    const { data: lastTask } = await supabase
+      .from('document_generation_tasks')
+      .select('output_files, status')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (lastTask && lastTask.output_files && Array.isArray(lastTask.output_files)) {
+      lastTaskErrorCount = lastTask.output_files.filter(
+        (file: any) => file.error,
+      ).length;
+    }
+
+    // 4. Procentowy postęp (jeśli są aktywne taski)
+    const { data: activeTasks } = await supabase
+      .from('document_generation_tasks')
+      .select('progress_total, progress_done, status')
+      .eq('project_id', projectId)
+      .in('status', ['pending', 'processing']);
+
+    let progressPercentage: number | null = null;
+    if (activeTasks && activeTasks.length > 0) {
+      let totalProgress = 0;
+      let totalDone = 0;
+      activeTasks.forEach((task) => {
+        totalProgress += task.progress_total || 0;
+        totalDone += task.progress_done || 0;
+      });
+      if (totalProgress > 0) {
+        progressPercentage = Math.round((totalDone / totalProgress) * 100);
+      }
+    }
+
+    return {
+      participantCount,
+      documentCount,
+      lastTaskErrorCount,
+      progressPercentage,
+    };
+  }
+
   // =====================================================
   // FIELD DEFINITIONS OPERATIONS
   // =====================================================
@@ -539,13 +747,8 @@ export class ProjectsService {
     userId: string,
     createFieldDto: CreateFieldDefinitionDto,
   ): Promise<FieldDefinitionResponseDto> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do tworzenia definicji pól',
-      );
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getClient();
 
@@ -591,13 +794,8 @@ export class ProjectsService {
     userId: string,
     fields: CreateFieldDefinitionDto[],
   ): Promise<FieldDefinitionResponseDto[]> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do tworzenia definicji pól',
-      );
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getClient();
 
@@ -669,13 +867,8 @@ export class ProjectsService {
     userId: string,
     updateFieldDto: UpdateFieldDefinitionDto,
   ): Promise<FieldDefinitionResponseDto> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do edycji definicji pól',
-      );
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getClient();
 
@@ -738,13 +931,8 @@ export class ProjectsService {
     fieldId: string,
     userId: string,
   ): Promise<void> {
-    // Check if user has admin access
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do usuwania definicji pól',
-      );
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getClient();
 
@@ -812,13 +1000,50 @@ export class ProjectsService {
 
   /**
    * Checks if user has admin access to a project
+   * @deprecated Use validateProjectRole instead
    */
   async userHasAdminAccess(
     projectId: string,
     userId: string,
   ): Promise<boolean> {
     const role = await this.getUserProjectRole(projectId, userId);
-    return role !== null && ['owner', 'admin'].includes(role);
+    return role !== null && ['owner', 'editor'].includes(role);
+  }
+
+  /**
+   * Waliduje rolę użytkownika w projekcie i rzuca ForbiddenException jeśli rola jest za niska
+   * Hierarchia ról: owner > editor > viewer
+   * @param projectId - ID projektu
+   * @param userId - ID użytkownika
+   * @param minRole - Minimalna wymagana rola ('owner', 'editor', 'viewer')
+   * @throws ForbiddenException jeśli użytkownik nie ma dostępu lub rola jest za niska
+   */
+  async validateProjectRole(
+    projectId: string,
+    userId: string,
+    minRole: 'owner' | 'editor' | 'viewer',
+  ): Promise<void> {
+    const userRole = await this.getUserProjectRole(projectId, userId);
+
+    if (!userRole) {
+      throw new ForbiddenException('Brak dostępu do tego projektu');
+    }
+
+    // Definiuj hierarchię ról (wyższa liczba = wyższe uprawnienia)
+    const roleHierarchy: Record<string, number> = {
+      viewer: 1,
+      editor: 2,
+      owner: 3,
+    };
+
+    const userRoleLevel = roleHierarchy[userRole] || 0;
+    const minRoleLevel = roleHierarchy[minRole] || 0;
+
+    if (userRoleLevel < minRoleLevel) {
+      throw new ForbiddenException(
+        `Wymagana rola: ${minRole}. Twoja rola: ${userRole}`,
+      );
+    }
   }
 
   private mapProjectToResponse(
@@ -1053,13 +1278,8 @@ export class ProjectsService {
     userId: string,
     spreadsheetIdOrUrl: string,
   ): Promise<ScanHeadersResponseDto> {
-    // Check if user has admin access to project
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do skanowania nagłówków dla tego projektu',
-      );
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     // Extract spreadsheet ID if a full URL was provided
     let spreadsheetId = spreadsheetIdOrUrl.trim();
@@ -1160,13 +1380,8 @@ export class ProjectsService {
     userId: string,
     mappings: CreateFieldMappingDto[],
   ): Promise<FieldMappingResponseDto[]> {
-    // Check if user has admin access to project
-    const role = await this.getUserProjectRole(projectId, userId);
-    if (!role || !['owner', 'admin'].includes(role)) {
-      throw new ForbiddenException(
-        'Brak uprawnień do aktualizacji mapowań dla tego projektu',
-      );
-    }
+    // Wymagana rola: owner (updateSettings)
+    await this.validateProjectRole(projectId, userId, 'owner');
 
     const supabase = this.supabaseService.getAdminClient();
 

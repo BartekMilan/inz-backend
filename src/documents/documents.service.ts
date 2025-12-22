@@ -43,6 +43,9 @@ export class DocumentsService {
     userId: string,
     generateDto: GenerateDocumentDto,
   ): Promise<{ buffer: Buffer; fileName: string }> {
+    // Wymagana rola: editor (generateDocuments)
+    await this.projectsService.validateProjectRole(projectId, userId, 'editor');
+
     // Step 1: Pobierz szablon z DB i zweryfikuj, że należy do projektu
     const template = await this.getTemplateForProject(
       projectId,
@@ -486,14 +489,8 @@ export class DocumentsService {
     userId: string,
     createTaskDto: CreateDocumentTaskDto,
   ): Promise<CreateDocumentTaskResponseDto> {
-    // Weryfikuj dostęp użytkownika do projektu
-    const hasAccess = await this.projectsService.userHasProjectAccess(
-      projectId,
-      userId,
-    );
-    if (!hasAccess) {
-      throw new NotFoundException('Projekt nie został znaleziony');
-    }
+    // Wymagana rola: editor (generateDocuments)
+    await this.projectsService.validateProjectRole(projectId, userId, 'editor');
 
     // Weryfikuj, że template należy do projektu
     await this.getTemplateForProject(projectId, createTaskDto.templateId, userId);

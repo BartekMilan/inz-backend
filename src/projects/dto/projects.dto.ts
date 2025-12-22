@@ -63,8 +63,7 @@ export class ProjectListResponseDto {
 
 export enum ProjectMemberRole {
   OWNER = 'owner',
-  ADMIN = 'admin',
-  MEMBER = 'member',
+  EDITOR = 'editor',
   VIEWER = 'viewer',
 }
 
@@ -75,7 +74,27 @@ export class AddProjectMemberDto {
 
   @IsEnum(ProjectMemberRole, { message: 'Nieprawidłowa rola' })
   @IsOptional()
-  role?: ProjectMemberRole = ProjectMemberRole.MEMBER;
+  role?: ProjectMemberRole = ProjectMemberRole.VIEWER;
+}
+
+export class AddProjectMemberByEmailDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Email jest wymagany' })
+  email: string;
+
+  @IsEnum(ProjectMemberRole, { message: 'Nieprawidłowa rola' })
+  @IsOptional()
+  role?: ProjectMemberRole = ProjectMemberRole.VIEWER;
+}
+
+export class AddProjectMemberByEmailDto {
+  @IsString()
+  @IsNotEmpty({ message: 'Email jest wymagany' })
+  email: string;
+
+  @IsEnum(ProjectMemberRole, { message: 'Nieprawidłowa rola' })
+  @IsOptional()
+  role?: ProjectMemberRole = ProjectMemberRole.VIEWER;
 }
 
 export class UpdateProjectMemberDto {
