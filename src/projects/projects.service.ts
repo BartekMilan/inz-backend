@@ -272,7 +272,7 @@ export class ProjectsService {
 
     this.logger.log(`Project updated: ${projectId}`);
 
-    return this.mapProjectToResponse(data, role);
+    return this.mapProjectToResponse(data, role || undefined);
   }
 
   /**
@@ -356,7 +356,7 @@ export class ProjectsService {
       .select('*')
       .single();
 
-    if (error) {
+    if (error || !data) {
       this.logger.error('Failed to add project member:', error);
       throw new InternalServerErrorException(
         'Nie udało się dodać członka do projektu',
@@ -397,8 +397,10 @@ export class ProjectsService {
 
     // Pobierz emaile użytkowników
     const { data: authUsers } = await supabase.auth.admin.listUsers();
-    const userMap = new Map(
-      (authUsers?.users || []).map((u) => [u.id, u.email]),
+    const userMap = new Map<string, string>(
+      ((authUsers?.users as any[]) || [])
+        .filter((u: any) => u.id && u.email)
+        .map((u: any) => [u.id, u.email] as [string, string]),
     );
 
     return (data || []).map((m) => {
@@ -693,18 +695,21 @@ export class ProjectsService {
 
     // 3. Liczba błędów w ostatnim tasku
     let lastTaskErrorCount = 0;
-    const { data: lastTask } = await supabase
+    const { data: lastTaskData, error: lastTaskError } = await supabase
       .from('document_generation_tasks')
       .select('output_files, status')
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
 
-    if (lastTask && lastTask.output_files && Array.isArray(lastTask.output_files)) {
-      lastTaskErrorCount = lastTask.output_files.filter(
-        (file: any) => file.error,
-      ).length;
+    if (!lastTaskError && lastTaskData) {
+      const lastTask = lastTaskData;
+      if (lastTask.output_files && Array.isArray(lastTask.output_files)) {
+        lastTaskErrorCount = lastTask.output_files.filter(
+          (file: any) => file.error,
+        ).length;
+      }
     }
 
     // 4. Procentowy postęp (jeśli są aktywne taski)

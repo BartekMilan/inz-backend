@@ -87,16 +87,6 @@ export class AddProjectMemberByEmailDto {
   role?: ProjectMemberRole = ProjectMemberRole.VIEWER;
 }
 
-export class AddProjectMemberByEmailDto {
-  @IsString()
-  @IsNotEmpty({ message: 'Email jest wymagany' })
-  email: string;
-
-  @IsEnum(ProjectMemberRole, { message: 'Nieprawidłowa rola' })
-  @IsOptional()
-  role?: ProjectMemberRole = ProjectMemberRole.VIEWER;
-}
-
 export class UpdateProjectMemberDto {
   @IsEnum(ProjectMemberRole, { message: 'Nieprawidłowa rola' })
   @IsNotEmpty({ message: 'Rola jest wymagana' })
