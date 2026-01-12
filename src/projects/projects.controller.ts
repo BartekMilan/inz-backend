@@ -32,6 +32,8 @@ import {
 } from './dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { RequestUser } from '../common/guards/auth.guard';
+import { Roles } from '../common/decorators/roles.decorator';
+import { Role } from '../common/enums/role.enum';
 
 @Controller('projects')
 export class ProjectsController {
@@ -58,8 +60,10 @@ export class ProjectsController {
 
   /**
    * Create a new project
+   * Only ADMIN can create projects
    */
   @Post()
+  @Roles(Role.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   async createProject(
     @Body() createProjectDto: CreateProjectDto,

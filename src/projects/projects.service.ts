@@ -1018,6 +1018,7 @@ export class ProjectsService {
   /**
    * Waliduje rolę użytkownika w projekcie i rzuca ForbiddenException jeśli rola jest za niska
    * Hierarchia ról: owner > editor > viewer
+   * ADMIN ma "God Mode" - pomija sprawdzanie członkostwa w projekcie
    * @param projectId - ID projektu
    * @param userId - ID użytkownika
    * @param minRole - Minimalna wymagana rola ('owner', 'editor', 'viewer')
@@ -1028,6 +1029,12 @@ export class ProjectsService {
     userId: string,
     minRole: 'owner' | 'editor' | 'viewer',
   ): Promise<void> {
+    // God Mode: ADMIN ma pełny dostęp do wszystkich projektów
+    const systemRole = await this.getUserSystemRole(userId);
+    if (systemRole === Role.ADMIN) {
+      return; // ADMIN ma dostęp do wszystkiego, pomijamy sprawdzanie członkostwa
+    }
+
     const userRole = await this.getUserProjectRole(projectId, userId);
 
     if (!userRole) {
