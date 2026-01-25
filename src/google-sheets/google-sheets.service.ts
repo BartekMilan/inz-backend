@@ -194,7 +194,31 @@ export class GoogleSheetsService implements OnModuleInit {
         );
       }
 
-      if (error.code === 401 || error.message?.includes('unauthorized') || error.message?.includes('invalid_grant')) {
+      // Sprawdź czy to błąd invalid_grant (wygasły lub nieprawidłowy refresh token)
+      const errorMessage = error.message || '';
+      const errorResponse = error.response?.data?.error || '';
+      const isInvalidGrant = 
+        errorMessage.includes('invalid_grant') ||
+        errorResponse === 'invalid_grant' ||
+        error.code === 'invalid_grant';
+
+      if (isInvalidGrant) {
+        this.logger.error(
+          `OAuth2 invalid_grant error detected. Refresh token may be expired or revoked.`,
+        );
+        this.logger.error(`Error details: ${JSON.stringify({
+          message: errorMessage,
+          code: error.code,
+          response: errorResponse,
+        })}`);
+        
+        throw new InternalServerErrorException(
+          'Token autoryzacji Google wygasł lub został odwołany. Wymagana jest ponowna autoryzacja OAuth2. ' +
+          'Administrator musi zaktualizować zmienną środowiskową GOOGLE_AUTH_REFRESH_TOKEN.',
+        );
+      }
+
+      if (error.code === 401 || error.message?.includes('unauthorized')) {
         this.logger.error('Authentication error - check OAuth2 credentials');
         throw new InternalServerErrorException(
           'Błąd autoryzacji z Google API. Sprawdź konfigurację OAuth2 (GOOGLE_AUTH_CLIENT_ID, GOOGLE_AUTH_CLIENT_SECRET, GOOGLE_AUTH_REFRESH_TOKEN).',
@@ -566,7 +590,6 @@ export class GoogleSheetsService implements OnModuleInit {
     } catch (error: any) {
       this.logger.error(`Failed to get sheet data from ${sheetId}:`, error.message);
       this.handleSheetError(error, 'pobrać danych z arkusza');
-      throw new InternalServerErrorException('Nie udało się pobrać danych z arkusza');
     }
   }
 
@@ -597,7 +620,6 @@ export class GoogleSheetsService implements OnModuleInit {
     } catch (error: any) {
       this.logger.error(`Failed to update sheet data:`, error.message);
       this.handleSheetError(error, 'zapisać danych do arkusza');
-      throw new InternalServerErrorException('Nie udało się zapisać danych do arkusza');
     }
   }
 
@@ -629,7 +651,6 @@ export class GoogleSheetsService implements OnModuleInit {
     } catch (error: any) {
       this.logger.error(`Failed to append row:`, error.message);
       this.handleSheetError(error, 'dodać wiersza do arkusza');
-      throw new InternalServerErrorException('Nie udało się dodać wiersza do arkusza');
     }
   }
 
@@ -637,6 +658,30 @@ export class GoogleSheetsService implements OnModuleInit {
    * Wspólna obsługa błędów Google Sheets API
    */
   private handleSheetError(error: any, action: string): never {
+    // Sprawdź czy to błąd invalid_grant (wygasły lub nieprawidłowy refresh token)
+    const errorMessage = error.message || '';
+    const errorResponse = error.response?.data?.error || '';
+    const isInvalidGrant = 
+      errorMessage.includes('invalid_grant') ||
+      errorResponse === 'invalid_grant' ||
+      error.code === 'invalid_grant';
+
+    if (isInvalidGrant) {
+      this.logger.error(
+        `OAuth2 invalid_grant error detected. Refresh token may be expired or revoked.`,
+      );
+      this.logger.error(`Error details: ${JSON.stringify({
+        message: errorMessage,
+        code: error.code,
+        response: errorResponse,
+      })}`);
+      
+      throw new InternalServerErrorException(
+        'Token autoryzacji Google wygasł lub został odwołany. Wymagana jest ponowna autoryzacja OAuth2. ' +
+        'Administrator musi zaktualizować zmienną środowiskową GOOGLE_AUTH_REFRESH_TOKEN.',
+      );
+    }
+
     if (error.code === 403) {
       throw new BadRequestException(
         `Brak uprawnień do ${action}. Upewnij się, że arkusz jest udostępniony dla konta Google używanego do autoryzacji OAuth2.`,
@@ -648,7 +693,10 @@ export class GoogleSheetsService implements OnModuleInit {
     }
 
     if (error.code === 401) {
-      throw new InternalServerErrorException('Błąd autoryzacji z Google API.');
+      this.logger.error(`OAuth2 401 error: ${errorMessage}`);
+      throw new InternalServerErrorException(
+        'Błąd autoryzacji z Google API. Sprawdź konfigurację OAuth2 (GOOGLE_AUTH_CLIENT_ID, GOOGLE_AUTH_CLIENT_SECRET, GOOGLE_AUTH_REFRESH_TOKEN).',
+      );
     }
 
     throw new InternalServerErrorException(`Nie udało się ${action}: ${error.message}`);

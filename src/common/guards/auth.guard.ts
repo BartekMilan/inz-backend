@@ -16,6 +16,8 @@ export interface RequestUser {
   firstName?: string;
   lastName?: string;
   role: Role;
+  isApproved?: boolean;
+  assignedProjectId?: string | null;
 }
 
 @Injectable()
@@ -66,7 +68,7 @@ export class AuthGuard implements CanActivate {
       }
 
       // Validate and set user role (default to REGISTRAR if not set)
-      const userRole = this.validateRole(user.user_metadata?.role);
+      const userRole = this.validateRole(user.user_metadata?.role || user.role);
 
       // Attach user to request for use in controllers
       const requestUser: RequestUser = {
@@ -75,9 +77,30 @@ export class AuthGuard implements CanActivate {
         firstName: user.user_metadata?.first_name,
         lastName: user.user_metadata?.last_name,
         role: userRole,
+        isApproved: user.isApproved === true,
+        assignedProjectId: user.assignedProjectId ?? null,
       };
 
       request.user = requestUser;
+
+      const normalizedPath = typeof path === 'string' ? path : '';
+      const isProfileRoute = normalizedPath.includes('/auth/profile');
+
+      if (!isProfileRoute && userRole === Role.REGISTRAR) {
+        if (requestUser.isApproved !== true) {
+          throw new ForbiddenException({
+            message: 'Konto oczekuje na zatwierdzenie przez administratora',
+            code: 'ACCOUNT_PENDING_APPROVAL',
+          });
+        }
+
+        if (!requestUser.assignedProjectId) {
+          throw new ForbiddenException({
+            message: 'Konto nie ma przypisanego projektu',
+            code: 'NO_PROJECT_ASSIGNED',
+          });
+        }
+      }
 
       return true;
     } catch (error) {

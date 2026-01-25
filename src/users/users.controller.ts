@@ -1,7 +1,7 @@
 import {
   Controller,
   Get,
-  Put,
+  Patch,
   Delete,
   Body,
   Param,
@@ -109,7 +109,7 @@ export class UsersController {
   /**
    * Update user approval status and/or project assignment (admin only)
    */
-  @Put(':userId/approval')
+  @Patch(':userId')
   @Roles(Role.ADMIN)
   async updateUserApproval(
     @Param('userId', ParseUUIDPipe) targetUserId: string,

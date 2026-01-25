@@ -147,9 +147,11 @@ export class ProjectsService {
 
   /**
    * Gets only projects the user is assigned to (for registrars)
+   * Checks: 1) owned projects, 2) project_members, 3) assigned_project_id in profile
    */
   private async getUserAssignedProjects(userId: string): Promise<ProjectResponseDto[]> {
     const supabase = this.supabaseService.getClient();
+    const adminSupabase = this.supabaseService.getAdminClient();
 
     // Get projects where user is owner
     const { data: ownedProjects, error: ownedError } = await supabase
@@ -174,6 +176,26 @@ export class ProjectsService {
       throw new InternalServerErrorException('Nie udało się pobrać projektów');
     }
 
+    // Check if user has assigned_project_id in profile (for REGISTRAR users)
+    const { data: profile } = await adminSupabase
+      .from('profiles')
+      .select('assigned_project_id')
+      .eq('id', userId)
+      .single();
+
+    let assignedProject: ProjectResponseDto | null = null;
+    if (profile?.assigned_project_id) {
+      const { data: project } = await adminSupabase
+        .from('projects')
+        .select('*')
+        .eq('id', profile.assigned_project_id)
+        .single();
+
+      if (project) {
+        assignedProject = this.mapProjectToResponse(project, 'viewer');
+      }
+    }
+
     // Combine and map results
     const owned = (ownedProjects || []).map((p) =>
       this.mapProjectToResponse(p, 'owner'),
@@ -190,6 +212,11 @@ export class ProjectsService {
         projectMap.set(p.id, p);
       }
     });
+
+    // Add assigned project if not already in the map
+    if (assignedProject && !projectMap.has(assignedProject.id)) {
+      projectMap.set(assignedProject.id, assignedProject);
+    }
 
     return Array.from(projectMap.values());
   }
@@ -963,6 +990,7 @@ export class ProjectsService {
 
   /**
    * Gets user's role in a project
+   * Checks: 1) owner, 2) project_members, 3) assigned_project_id in profile (for REGISTRAR)
    */
   async getUserProjectRole(
     projectId: string,
@@ -981,7 +1009,7 @@ export class ProjectsService {
       return 'owner';
     }
 
-    // Check membership
+    // Check membership in project_members table
     const { data: member } = await supabase
       .from('project_members')
       .select('role')
@@ -989,7 +1017,30 @@ export class ProjectsService {
       .eq('user_id', userId)
       .single();
 
-    return member?.role || null;
+    if (member?.role) {
+      return member.role;
+    }
+
+    // Check if user has this project assigned via assigned_project_id in profile
+    // This is for REGISTRAR users who are assigned to a project but not in project_members
+    const adminSupabase = this.supabaseService.getAdminClient();
+    const { data: profile } = await adminSupabase
+      .from('profiles')
+      .select('assigned_project_id, role')
+      .eq('id', userId)
+      .single();
+
+    if (profile?.assigned_project_id === projectId) {
+      // REGISTRAR z przypisanym projektem dostaje rolę 'editor'
+      // żeby móc dodawać i edytować uczestników (główne zadanie tej roli)
+      if (profile?.role === 'registrar') {
+        return 'editor';
+      }
+      // Inni użytkownicy z przypisanym projektem dostają 'viewer'
+      return 'viewer';
+    }
+
+    return null;
   }
 
   /**
@@ -1214,8 +1265,9 @@ export class ProjectsService {
     // Step 5: Transform rows from Google Sheets to participant objects
     const participants: ParticipantDataDto[] = [];
     
-    // Skip first row if it's a header (optional - you might want to make this configurable)
-    const startRow = 0; // Start from first row (0-indexed)
+    // Skip first row (index 0) as it contains headers
+    // Start from row index 1 (second row in the sheet, first data row)
+    const startRow = 1;
     
     for (let rowIndex = startRow; rowIndex < rawSheetData.length; rowIndex++) {
       const row = rawSheetData[rowIndex];
@@ -1226,7 +1278,7 @@ export class ProjectsService {
       }
 
       const participant: ParticipantDataDto = {
-        id: rowIndex + 1, // Use row number as ID (1-indexed)
+        id: rowIndex + 1, // Use row number as ID (1-indexed, corresponds to sheet row number)
       };
 
       // Map each field according to the mapping configuration

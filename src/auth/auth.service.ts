@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupabaseService } from '../supabase/supabase.service';
 import { RegisterDto, LoginDto, ResetPasswordDto, UpdatePasswordDto } from './dto';
@@ -114,27 +114,8 @@ export class AuthService {
                   console.log('User Email:', finalData.user.email);
                   console.log('User metadata:', JSON.stringify(finalData.user.user_metadata, null, 2));
 
-                  // Check approval status for registrars
-                  console.log('Calling checkRegistrarApproval...');
-                  await this.checkRegistrarApproval(finalData.user.id);
-                  console.log('checkRegistrarApproval completed successfully');
-
-                  // Fetch profile to get assigned_project_id
-                  const { data: profile, error: profileError } = await supabase
-                    .from('profiles')
-                    .select('role, assigned_project_id')
-                    .eq('id', finalData.user.id)
-                    .single<ProfileData>();
-
-                  if (profileError) {
-                    this.logger.warn(`Failed to fetch profile for user ${finalData.user.id}`, { error: profileError });
-                  }
-
-                  // Build user object with assigned_project_id
-                  const userResponse = {
-                    ...finalData.user,
-                    assignedProjectId: profile?.assigned_project_id || null,
-                  };
+                  const profile = await this.getProfileData(finalData.user.id);
+                  const userResponse = this.buildUserResponse(finalData.user, profile);
 
                   console.log('Returning success response');
                   return {
@@ -169,27 +150,8 @@ export class AuthService {
       console.log('User Email:', data.user.email);
       console.log('User metadata:', JSON.stringify(data.user.user_metadata, null, 2));
 
-      // Check approval status for registrars
-      console.log('Calling checkRegistrarApproval...');
-      await this.checkRegistrarApproval(data.user.id);
-      console.log('checkRegistrarApproval completed successfully');
-
-      // Fetch profile to get assigned_project_id
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('role, assigned_project_id')
-        .eq('id', data.user.id)
-        .single<ProfileData>();
-
-      if (profileError) {
-        this.logger.warn(`Failed to fetch profile for user ${data.user.id}`, { error: profileError });
-      }
-
-      // Build user object with assigned_project_id
-      const userResponse = {
-        ...data.user,
-        assignedProjectId: profile?.assigned_project_id || null,
-      };
+      const profile = await this.getProfileData(data.user.id);
+      const userResponse = this.buildUserResponse(data.user, profile);
 
       console.log('Returning success response');
       return {
@@ -206,7 +168,6 @@ export class AuthService {
       console.log('Error type:', error?.constructor?.name);
       console.log('Error message:', error?.message);
       console.log('Error stack:', error?.stack);
-      console.log('Is ForbiddenException:', error instanceof ForbiddenException);
       console.log('Is UnauthorizedException:', error instanceof UnauthorizedException);
       
       // Re-throw the error to preserve the original exception
@@ -235,7 +196,9 @@ export class AuthService {
       throw new UnauthorizedException('Nieprawidłowy token');
     }
 
-    const userRole = this.validateRole(data.user.user_metadata?.role);
+    const profile = await this.getProfileData(data.user.id);
+    const userRole = this.validateRole(profile?.role || data.user.user_metadata?.role);
+    const isApproved = userRole === Role.REGISTRAR ? profile?.is_approved === true : true;
 
     return {
       id: data.user.id,
@@ -243,6 +206,8 @@ export class AuthService {
       firstName: data.user.user_metadata?.first_name,
       lastName: data.user.user_metadata?.last_name,
       role: userRole,
+      isApproved,
+      assignedProjectId: profile?.assigned_project_id || null,
       createdAt: data.user.created_at,
     };
   }
@@ -338,25 +303,8 @@ export class AuthService {
       throw new BadRequestException(error.message);
     }
 
-    // Check approval status for registrars
-    await this.checkRegistrarApproval(data.user.id);
-
-    // Fetch profile to get assigned_project_id
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role, assigned_project_id')
-      .eq('id', data.user.id)
-      .single<ProfileData>();
-
-    if (profileError) {
-      this.logger.warn(`Failed to fetch profile for user ${data.user.id}`, { error: profileError });
-    }
-
-    // Build user object with assigned_project_id
-    const userResponse = {
-      ...data.user,
-      assignedProjectId: profile?.assigned_project_id || null,
-    };
+    const profile = await this.getProfileData(data.user.id);
+    const userResponse = this.buildUserResponse(data.user, profile);
 
     return {
       user: userResponse,
@@ -378,143 +326,39 @@ export class AuthService {
       return null;
     }
 
-    // Check approval status for registrars on token validation
-    // This ensures that even if a token is valid, registrars must be approved
-    await this.checkRegistrarApproval(data.user.id);
-
-    return data.user;
+    const profile = await this.getProfileData(data.user.id);
+    return this.buildUserResponse(data.user, profile);
   }
 
   /**
-   * Checks if a registrar user is approved and has a project assigned.
-   * Throws ForbiddenException if not approved or no project assigned.
+   * Pobiera dane profilu użytkownika z tabeli profiles.
    */
-  private async checkRegistrarApproval(userId: string): Promise<void> {
+  private async getProfileData(userId: string): Promise<ProfileData | null> {
     const supabase = this.supabaseService.getClient();
 
-    // STEP 2: Inspect and fix the database query
-    // Try explicit field selection first, then fallback to * if needed
-    let { data: profile, error } = await supabase
+    const { data: profile, error } = await supabase
       .from('profiles')
       .select('role, is_approved, assigned_project_id')
       .eq('id', userId)
       .single<ProfileData>();
 
-    // If explicit select fails or returns incomplete data, try select('*')
-    if (error || !profile || (profile && profile.role === 'registrar' && !profile.assigned_project_id)) {
-      console.log('=== FALLBACK: Trying select(*) query ===');
-      const fallbackResult = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
-      console.log('Fallback query result:', JSON.stringify(fallbackResult, null, 2));
-      
-      if (!fallbackResult.error && fallbackResult.data) {
-        profile = fallbackResult.data as any;
-        error = null;
-        console.log('Using fallback profile data');
-      }
-    }
-
-    // STEP 1: Aggressive logging - print RAW profile object
-    console.log('=== DEBUG CHECK REGISTRAR APPROVAL ===');
-    console.log('User ID:', userId);
-    console.log('Query Error:', error);
-    console.log('DEBUG RAW PROFILE:', JSON.stringify(profile, null, 2));
-    console.log('Profile exists:', !!profile);
-    
-    if (profile) {
-      console.log('Checks:', {
-        role: profile.role,
-        approved: profile.is_approved,
-        project: profile.assigned_project_id,
-        'is_approved type': typeof profile.is_approved,
-        'is_approved value': profile.is_approved,
-        'assigned_project_id type': typeof profile.assigned_project_id,
-        'assigned_project_id value': profile.assigned_project_id,
-        'assigned_project_id === null': profile.assigned_project_id === null,
-        'assigned_project_id === undefined': profile.assigned_project_id === undefined,
-        'All profile keys': Object.keys(profile),
-      });
-    }
-
-    // Debug logging to help diagnose issues
-    this.logger.debug(`Checking registrar approval for user ${userId}`, {
-      hasError: !!error,
-      error: error?.message,
-      profile: profile ? {
-        role: profile.role,
-        is_approved: profile.is_approved,
-        assigned_project_id: profile.assigned_project_id,
-        assigned_project_id_type: typeof profile.assigned_project_id,
-        assigned_project_id_is_null: profile.assigned_project_id === null,
-        assigned_project_id_is_undefined: profile.assigned_project_id === undefined,
-      } : null,
-    });
-
     if (error || !profile) {
-      // If profile doesn't exist, default to registrar and check approval
       this.logger.warn(`Profile not found for user ${userId}`, { error });
-      console.log('ERROR: Profile not found or query error');
-      throw new ForbiddenException({
-        message: 'Konto oczekuje na zatwierdzenie',
-        code: 'ACCOUNT_PENDING_APPROVAL',
-      });
+      return null;
     }
 
-    // STEP 3: Fix the logic condition - handle both naming conventions
-    // Only check approval for registrars (admins bypass this check)
-    if (profile.role === 'registrar') {
-      // Check both potential naming conventions just to be safe during debugging
-      // or standardize on one
-      const projectId = (profile as any).assigned_project_id || (profile as any).assignedProjectId;
-      const isApproved = (profile as any).is_approved !== undefined 
-        ? (profile as any).is_approved === true 
-        : (profile as any).isApproved === true;
+    return profile;
+  }
 
-      console.log('=== REGISTRAR VALIDATION CHECKS ===');
-      console.log('Role:', profile.role);
-      console.log('isApproved (snake_case):', (profile as any).is_approved);
-      console.log('isApproved (camelCase):', (profile as any).isApproved);
-      console.log('Final isApproved check:', isApproved);
-      console.log('projectId (snake_case):', (profile as any).assigned_project_id);
-      console.log('projectId (camelCase):', (profile as any).assignedProjectId);
-      console.log('Final projectId check:', projectId);
-      console.log('Has project (not null/undefined):', projectId !== null && projectId !== undefined);
+  private buildUserResponse(user: any, profile: ProfileData | null) {
+    const role = profile?.role ?? user.user_metadata?.role ?? user.role;
+    const isApproved = role === Role.REGISTRAR ? profile?.is_approved === true : true;
 
-      // Check both null and undefined explicitly
-      const hasProject = projectId !== null && projectId !== undefined && projectId !== '';
-
-      this.logger.debug(`Registrar approval check for user ${userId}`, {
-        isApproved,
-        hasProject,
-        assigned_project_id: projectId,
-      });
-
-      if (!isApproved) {
-        console.log('FAILED: Account not approved');
-        throw new ForbiddenException({
-          message: 'Konto oczekuje na zatwierdzenie przez administratora',
-          code: 'ACCOUNT_PENDING_APPROVAL',
-        });
-      }
-
-      if (!hasProject) {
-        console.log('FAILED: No project assigned');
-        this.logger.warn(`Registrar ${userId} is approved but has no assigned project`, {
-          assigned_project_id: projectId,
-        });
-        throw new ForbiddenException({
-          message: 'Konto nie ma przypisanego projektu',
-          code: 'NO_PROJECT_ASSIGNED',
-        });
-      }
-
-      console.log('SUCCESS: Registrar validation passed');
-    } else {
-      console.log('SKIPPED: User is not a registrar (role:', profile.role, ')');
-    }
+    return {
+      ...user,
+      role,
+      isApproved,
+      assignedProjectId: profile?.assigned_project_id || null,
+    };
   }
 }
